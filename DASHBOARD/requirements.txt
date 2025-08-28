@@ -1,0 +1,23 @@
+# Requerido para la app base
+streamlit
+
+# Manejo de datos
+pandas
+numpy
+
+# Manejo de archivos Excel
+openpyxl
+xlrd
+
+# Graficación y visualización
+plotly
+matplotlib
+
+# Para exportar a PowerPoint (pptx)
+python-pptx
+
+# Para cálculos espaciales o clustering si lo usas
+scikit-learn
+
+# Opcional: mejora de visualizaciones
+seaborn
