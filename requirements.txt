@@ -1,23 +1,21 @@
-# Requerido para la app base
+# Core
 streamlit
-
-# Manejo de datos
 pandas
 numpy
 
-# Manejo de archivos Excel
+# Visualización
+altair
+plotly
+
+# Manejo de archivos (Excel, CSV, Parquet)
 openpyxl
 xlrd
+xlsxwriter
+pyarrow
+fsspec
 
-# Graficación y visualización
-plotly
-matplotlib
+# HTTP para leer datos desde URL (GitHub, etc.)
+requests
 
-# Para exportar a PowerPoint (pptx)
+# Exportar a PowerPoint
 python-pptx
-
-# Para cálculos espaciales o clustering si lo usas
-scikit-learn
-
-# Opcional: mejora de visualizaciones
-seaborn

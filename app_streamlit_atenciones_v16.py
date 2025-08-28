@@ -15,7 +15,7 @@ from pptx.chart.data import CategoryChartData
 from pptx.enum.chart import XL_CHART_TYPE
 from pptx.dml.color import RGBColor
 
-# ===== NUEVO: para lectura por URL =====
+# ===== Lectura por URL (controlada por Secrets) =====
 import requests
 
 # ===================== CONFIGURACIÓN GLOBAL =====================
@@ -36,6 +36,17 @@ st.markdown("""
   .kpi-value{ font-size:1.7rem; font-weight:800; color:#F8FAFC; }
 </style>
 """, unsafe_allow_html=True)
+
+# ===== Ayuda visible sobre la barra lateral =====
+with st.sidebar.expander("ℹ️ ¿Qué es la barra lateral?", expanded=False):
+    st.markdown(
+        """
+**Barra lateral** = el panel a la **izquierda** con filtros y opciones.  
+- Aquí cargas los datos (admin) y ajustas los filtros (EPS, Especialidad, etc.).  
+- En **celular o pantalla pequeña**, toca el ícono **☰** (o “>”) para mostrarla/ocultarla.
+        """
+    )
+st.caption("💡 Usa la **barra lateral izquierda** para ajustar filtros y opciones del dashboard.")
 
 PALETTE = ["#60A5FA","#34D399","#FBBF24","#A78BFA","#F87171","#22D3EE",
            "#F472B6","#4ADE80","#93C5FD","#F59E0B"]
@@ -162,21 +173,7 @@ def donut_chart(df_counts: pd.DataFrame, cat_col: str, title: str, max_slices=12
     return (arc + text + values).properties(height=360, title=title, background="#0f172a")
 
 
-# ===================== CARGA DE DATOS =====================
-@st.cache_data(show_spinner=False)
-def load_data(uploaded_file: BytesIO) -> pd.DataFrame:
-    name = uploaded_file.name.lower()
-    if name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file, dtype=str, sep=None, engine="python")
-    else:
-        df = pd.read_excel(uploaded_file, dtype=str)
-    df = normalize_cols(df)
-    df = ensure_columns(df)
-    df["EDAD"] = pd.to_numeric(df["EDAD"], errors="coerce")
-    df = parse_dates(df)
-    return df
-
-# ===== NUEVO: lectura por URL (xlsx/xls/csv/parquet) =====
+# ===================== CARGA DE DATOS DESDE SECRETS =====================
 def _to_github_raw(url: str) -> str:
     """Convierte https://github.com/.../blob/... -> https://raw.githubusercontent.com/..."""
     if "github.com" in url and "/blob/" in url:
@@ -195,6 +192,7 @@ def _fetch_bytes(url: str, token: str | None = None) -> bytes:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_data_from_url(url: str, token: str | None = None) -> pd.DataFrame:
+    """Lee .xlsx/.xls/.csv/.parquet desde URL; normaliza y tipa igual que tu flujo original."""
     url = _to_github_raw(url)
     raw = _fetch_bytes(url, token)
     bio = BytesIO(raw)
@@ -232,38 +230,25 @@ def load_data_from_url(url: str, token: str | None = None) -> pd.DataFrame:
 
 
 # ===================== UI – SIDEBAR (FILTROS & AJUSTES) =====================
-st.sidebar.title("📎 Carga de datos")
+st.sidebar.title("📎 Carga de datos (admin)")
 
-# ===== NUEVO: selector de origen =====
-origen = st.sidebar.radio(
-    "Origen de datos",
-    ["Subir archivo", "URL (.xlsx/.xls/.csv/.parquet)"],
-    index=0
-)
+# Lee SIEMPRE desde Secrets
+DATA_URL = st.secrets.get("DATA_URL", "")
+GH_TOKEN = st.secrets.get("GITHUB_TOKEN", None)
 
-df = None
-if origen == "Subir archivo":
-    uploaded = st.sidebar.file_uploader("Sube tu archivo (CSV/Excel)", type=["csv","xlsx","xls"])
-    if uploaded is None:
-        st.info("Sube un archivo o cambia a 'URL' para pegar un enlace (GitHub RAW, Drive público, etc.).")
+if not DATA_URL:
+    st.error("Falta configurar DATA_URL en Settings → Secrets de Streamlit.")
+    st.stop()
+
+with st.sidebar.expander("Origen activo (solo info)", expanded=False):
+    st.code(DATA_URL)
+
+with st.spinner("Cargando datos desde la URL configurada..."):
+    try:
+        df = load_data_from_url(DATA_URL, GH_TOKEN)
+    except Exception as e:
+        st.error(f"No se pudo leer DATA_URL.\n\n{e}")
         st.stop()
-    df = load_data(uploaded)
-else:
-    url = st.sidebar.text_input(
-        "Pega la URL del archivo",
-        placeholder="https://raw.githubusercontent.com/usuario/repo/main/data/archivo.xlsx"
-    )
-    # Si tu repo es privado, define en Secrets: GITHUB_TOKEN="tu_PAT"
-    gh_token = st.secrets.get("GITHUB_TOKEN", None)
-    if not url:
-        st.info("Pega una URL válida (RAW). Acepta .xlsx/.xls/.csv/.parquet.")
-        st.stop()
-    with st.spinner("Cargando datos desde URL..."):
-        try:
-            df = load_data_from_url(url, gh_token)
-        except Exception as e:
-            st.error(f"No se pudo leer la URL.\n\n{e}")
-            st.stop()
 
 with st.sidebar.expander("🎯 Segmentaciones", expanded=True):
     eps_f    = st.multiselect("EPS",          safe_unique_opts(df, "EPS"),           default=safe_unique_opts(df, "EPS"))
@@ -274,14 +259,16 @@ with st.sidebar.expander("🎯 Segmentaciones", expanded=True):
 
     st.markdown("**Profesional**")
     available_prof_cols = [c for c in ["PRESTADOR","ENFERMERA"] if c in df.columns]
-    if len(available_prof_cols)==0:
+    if len(available_prof_cols) == 0:
         chosen_prof_col, prof_f = None, []
         st.warning("No se encontró columna PRESTADOR ni ENFERMERA.")
     else:
         chosen_prof_col = st.selectbox("Columna", options=available_prof_cols, index=0)
-        prof_f = st.multiselect(f"Selecciona {chosen_prof_col}",
-                                safe_unique_opts(df, chosen_prof_col),
-                                default=safe_unique_opts(df, chosen_prof_col))
+        prof_f = st.multiselect(
+            f"Selecciona {chosen_prof_col}",
+            safe_unique_opts(df, chosen_prof_col),
+            default=safe_unique_opts(df, chosen_prof_col)
+        )
 
     # Rango de fechas
     min_date = pd.to_datetime("1900-01-01")
@@ -289,9 +276,11 @@ with st.sidebar.expander("🎯 Segmentaciones", expanded=True):
     if df["FECHA_ATENCION"].notna().any():
         min_date = df["FECHA_ATENCION"].dropna().min()
         max_date = df["FECHA_ATENCION"].dropna().max()
-    date_range = st.date_input("Rango de FECHA_ATENCION",
-                               value=(min_date.date() if pd.notna(min_date) else None,
-                                      max_date.date() if pd.notna(max_date) else None))
+    date_range = st.date_input(
+        "Rango de FECHA_ATENCION",
+        value=(min_date.date() if pd.notna(min_date) else None,
+               max_date.date() if pd.notna(max_date) else None)
+    )
 
 with st.sidebar.expander("⚙️ Ajustes de visualización", expanded=False):
     top_n = st.slider("Top N para tortas (EPS/Programa/Sede)", 5, 20, 10, 1)
@@ -300,7 +289,7 @@ with st.sidebar.expander("⚙️ Ajustes de visualización", expanded=False):
 # Aplicar filtros
 filt = pd.Series(True, index=df.index)
 def safe_in(col, values):
-    return df[col].isin(values) if (col in df.columns and len(values)>0) else pd.Series(True, index=df.index)
+    return df[col].isin(values) if (col in df.columns and len(values) > 0) else pd.Series(True, index=df.index)
 filt = (
     safe_in("EPS", eps_f) &
     safe_in("ESPECIALIDAD", esp_f) &
@@ -308,10 +297,10 @@ filt = (
     safe_in("SEDE", sede_f) &
     safe_in("GENERO", genero_f)
 )
-if chosen_prof_col is not None:
+if 'chosen_prof_col' in locals() and chosen_prof_col is not None:
     filt = filt & safe_in(chosen_prof_col, prof_f)
 if (
-    isinstance(date_range, tuple) and len(date_range)==2 and date_range[0] and date_range[1]
+    isinstance(date_range, tuple) and len(date_range) == 2 and date_range[0] and date_range[1]
     and df["FECHA_ATENCION"].notna().any()
 ):
     start, end = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -355,8 +344,7 @@ with tab2:
             base = alt.Chart(g_edad).encode(
                 x=alt.X("Valor:Q", title="Valor", axis=alt.Axis(labelColor="#E5E7EB", titleColor="#F8FAFC")),
                 y=alt.Y("RANGO_EDAD:N", title="Rango de edad",
-                        sort=list(g_edad["RANGO_EDAD"].astype(str).unique()),
-                        axis=alt.Axis(labelColor="#E5E7EB", titleColor="#F8FAFC")),
+                        sort=list(g_edad["RANGO_EDAD"].astype(str).unique())),
                 color=alt.Color("Métrica:N", scale=alt.Scale(range=[PALETTE[0], PALETTE[2]]),
                                 legend=alt.Legend(title="Métrica", labelColor="#F8FAFC", titleColor="#F8FAFC")),
                 tooltip=["RANGO_EDAD:N","Métrica:N",alt.Tooltip("Valor:Q", format=",.0f")]
@@ -375,8 +363,9 @@ with tab2:
         if ch is not None: st.altair_chart(ch, use_container_width=True)
         else: st.info("Sin datos de sede.")
     with colD:
-        g_prof = agg_both(dff, "PRESTADOR" if "PRESTADOR" in dff.columns else (chosen_prof_col or "ENFERMERA"), top_n=20)
-        ch = bar_two_metrics(g_prof, (chosen_prof_col or "Profesional"), "Profesional")
+        prof_col = "PRESTADOR" if "PRESTADOR" in dff.columns else ("ENFERMERA" if "ENFERMERA" in dff.columns else None)
+        g_prof = agg_both(dff, prof_col, top_n=20) if prof_col else pd.DataFrame()
+        ch = bar_two_metrics(g_prof, (prof_col or "Profesional"), "Profesional")
         if ch is not None: st.altair_chart(ch, use_container_width=True)
         else: st.info("Sin datos de profesional.")
 
@@ -402,8 +391,9 @@ with tab3:
         if ch is not None: st.altair_chart(ch, use_container_width=True)
         else: st.info("Sin datos de Sede.")
     with dE:
-        if chosen_prof_col:
-            df_prof = total_by(dff, chosen_prof_col); ch = donut_chart(df_prof, chosen_prof_col, f"Profesional Top {top_n} (Historias)", max_slices=top_n)
+        prof_col_for_donut = "PRESTADOR" if "PRESTADOR" in dff.columns else ("ENFERMERA" if "ENFERMERA" in dff.columns else None)
+        if prof_col_for_donut:
+            df_prof = total_by(dff, prof_col_for_donut); ch = donut_chart(df_prof, prof_col_for_donut, f"Profesional Top {top_n} (Historias)", max_slices=top_n)
             if ch is not None: st.altair_chart(ch, use_container_width=True)
             else: st.info("Sin datos de Profesional.")
 
@@ -507,7 +497,7 @@ with tab5:
         ppt_add_bar(prs, "Sede — Pacientes únicos vs Historias (Top 20)", agg_both(dff, "SEDE", top_n=20), "SEDE", vertical=vertical_bars)
         ppt_add_bar(prs, f"EPS — Pacientes únicos vs Historias (Top {top_n})", agg_both(dff, "EPS", top_n=top_n), "EPS", vertical=vertical_bars)
         ppt_add_bar(prs, f"Programa — Pacientes únicos vs Historias (Top {top_n})", agg_both(dff, "PROGRAMA", top_n=top_n), "PROGRAMA", vertical=vertical_bars)
-        if chosen_prof_col:
+        if 'chosen_prof_col' in locals() and chosen_prof_col:
             ppt_add_bar(prs, f"Profesional — Pacientes únicos vs Historias (Top 20) [{chosen_prof_col}]",
                         agg_both(dff, chosen_prof_col, top_n=20), chosen_prof_col, vertical=vertical_bars)
         # Donas (Historias)
@@ -524,7 +514,7 @@ with tab5:
         # Export
         bio = BytesIO(); prs.save(bio); bio.seek(0); return bio.getvalue()
 
-    ppt_bytes = build_ppt(dff, top_n, chosen_prof_col if 'chosen_prof_col' in locals() else None, vertical_bars=ppt_bars_vertical)
+    ppt_bytes = build_ppt(dff, top_n, ('chosen_prof_col' in locals() and chosen_prof_col) and chosen_prof_col or None, vertical_bars=ppt_bars_vertical)
     st.download_button(
         "📥 Descargar presentación (PPTX)",
         data=ppt_bytes,
